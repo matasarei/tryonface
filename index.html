@@ -3,7 +3,7 @@
     <head>
         <title>Camera Project</title>
         <meta charset="utf-8">
-        <style>		
+        <style>
             #overlay {
                 position: absolute;
                 top: 0px;
@@ -28,13 +28,13 @@
                 position : relative;
                 margin : 0px auto;
             }
-            
+
             #start {
                 margin:0 auto;
                 width:100px;
                 display: block;
             }
-            
+
             #debug {
                 width:640px;
                 margin: 0 auto;
@@ -48,22 +48,19 @@
         <!-- jquery -->
         <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.11.2/jquery.min.js"></script>
         <!-- three.js r54 -->
-        <script src="./js/three.js"></script>
+        <script src="js/three.js"></script>
         <!-- clmtrack -->
-        <script src="./js/utils.js"></script>
-        <script src="./js/jsfeat-min.js"></script>
-        <script src="./js/frontalface.js"></script>
-        <script src="./js/jsfeat_detect.js"></script>
-        <script src="./js/numeric-1.2.6.min.js"></script>
-        <script src="./js/mosse.js"></script>
-        <script src="./js/left_eye_filter.js"></script>
-        <script src="./js/right_eye_filter.js"></script>
-        <script src="./js/nose_filter.js"></script>
-        <script src="./models/model_pca_20_svm.js"></script>
-        <script src="./js/clm.js"></script>
-        <script src="./js/svmfilter_webgl.js"></script>
-        <script src="./js/svmfilter_fft.js"></script>
-        <script src="./js/mossefilter.js"></script>
+        <script src="js/numeric-1.2.6.min.js"></script>
+        <script src="js/utils.js"></script>
+        <script src="js/jsfeat-min.js"></script>
+        <script src="js/frontalface.js"></script>
+        <script src="js/left_eye_filter.js"></script>
+        <script src="js/right_eye_filter.js"></script>
+        <script src="js/nose_filter.js"></script>
+        <script src="js/svmfilter_webgl.js"></script>
+        <script src="js/svmfilter_fft.js"></script>
+        <script src="js/model_spca_20_svm.js"></script>
+        <script src="js/clmtrackr.js"></script>
         <div id="tryon">
             <video id="camera" loop></video>
             <canvas id="overlay"></canvas>
@@ -84,13 +81,13 @@
              */
             var TryOnFace = function (params) {
                 var ref = this;
-                
+
                 this.selector = 'tryon';
                 //sizes
                 this.object = params.object;
                 this.width = params.width;
                 this.height = params.height;
-                
+
                 if (params.statusHandler) {
                     this.statusHandler = params.statusHandler;
                 } else {
@@ -101,7 +98,7 @@
                     this.statusHandler(this.status);
                 };
                 this.changeStatus('STATUS_READY');
-                
+
                 if (params.debug) {
                     this.debug = true;
                     this.debugMsg = this.status;
@@ -114,21 +111,21 @@
                 document.getElementById(this.selector).style.width = this.width + "px";
                 this.video.setAttribute('width', this.width);
                 this.video.setAttribute('height', this.height);
-                
+
                 /* face tracker */
                 this.tracker = new clm.tracker({useWebGL: true});
                 this.tracker.init(pModel);
-                
+
                 /**
                  * Start try-on
                  * @returns {undefined}
                  */
                 this.start = function() {
-                    var vid = this.video;
-                    
+                    var vid = ref.video;
+
                     navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
                     window.URL = window.URL || window.webkitURL || window.msURL || window.mozURL;
-                    
+
                     // check for camera support
                     if (navigator.getUserMedia) {
                         // set up stream
@@ -147,36 +144,36 @@
                             }
                             vid.play();
                         }, function () {
-                            this.changeStatus('STATUS_CAMERA_ERROR');
+                            ref.changeStatus('STATUS_CAMERA_ERROR');
                         });
                     } else {
-                        this.changeStatus('STATUS_CAMERA_ERROR');
+                        ref.changeStatus('STATUS_CAMERA_ERROR');
                     }
 
                     //start tracking
-                    this.tracker.start(vid);
+                    ref.tracker.start(vid);
                     //continue in loop
-                    this.loop();
+                    ref.loop();
                 };
-                
+
                 this.debug = function(msg) {
                     if (this.debug) {
                         this.debugMsg += msg + "<br>";
                     }
                 };
-                
+
                 this.printDebug = function() {
                     if (this.debug) {
                         document.getElementById('debug').innerHTML = this.debugMsg;
                         this.debugMsg = '';
                     }
                 };
-                
+
                 this.loop = function() {
                     requestAnimFrame(ref.loop);
-                    
+
                     var positions = ref.tracker.getCurrentPosition();
-                    
+
                     if (positions) {
                         //current distance
                         var distance = Math.abs(90 / ((positions[0][0].toFixed(0) - positions[14][0].toFixed(0)) / 2));
@@ -188,13 +185,13 @@
                             y: (positions[33][1] + positions[41][1]) / 2
                         };
                         center = ref.correct(center.x, center.y);
-                        
+
                         var zAngle = (positions[33][0] - positions[7][0]) * -1;
-                        
+
                         //allowable distance
                         if (distance < 1.5 && distance > 0.5) {
                             ref.changeStatus('STATUS_FOUND');
-                            
+
                             //set positions
                             ref.position.x = center.x - (hAngle / 2);
                             ref.position.y = center.y;
@@ -211,11 +208,11 @@
                             ref.size.x = 0;
                             ref.size.y = 0;
                         }
-                        
+
                         ref.render();
                         ref.debug(ref.status);
                     }
-                    
+
                     //print debug
                     ref.printDebug();
                 };
@@ -242,7 +239,7 @@
 
                 this.images = [];
                 var materials = [];
-                for (i = 0; i < 6; i++) {                    
+                for (i = 0; i < 6; i++) {
                     if (this.object.outside[outside[i]] !== undefined) {
                         var image = new Image();
                         image.src = this.object.outside[outside[i]];
@@ -272,7 +269,7 @@
                     y: 1,
                     z: 1
                 };
-                
+
                 //set up object
                 var geometry = new THREE.CubeGeometry(1, 1, 1);
                 var materials = new THREE.MeshFaceMaterial(materials);
@@ -296,7 +293,7 @@
                 lightLeft.position.set(1000, 0, 0);
                 lightLeft.intensity = 0.7;
                 scene.add(lightLeft);
-                
+
                 var lightRight = new THREE.PointLight(0xffffff);
                 lightRight.position.set(-1000, 0, 0);
                 lightRight.intensity = 0.7;
@@ -321,7 +318,7 @@
 
                     renderer.render(scene, camera);
                 };
-                
+
                 /**
                  * Transform position for 3D scene
                  */
@@ -335,11 +332,11 @@
                 //print debug
                 this.printDebug();
             };
-            
+
             var tryOn = null;
             $(window).load(function () {
                 $('#start').hide();
-                
+
                 var object = {
                     outside: {
                         left: 'glasses/left.png',
@@ -347,7 +344,7 @@
                         front: 'glasses/front.png'
                     }
                 };
-                
+
                 tryOn = new TryOnFace({
                     width: 640,
                     height: 480,
@@ -371,7 +368,7 @@
                         }
                     }
                 });
-                
+
                 $('#start').click(function() {
                     tryOn.start();
                 });

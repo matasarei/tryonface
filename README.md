@@ -7,5 +7,7 @@ Powered by:
 
 ![screen](https://cloud.githubusercontent.com/assets/6638367/5941609/cd68db14-a71a-11e4-8d1c-67040e522287.jpg)
 
+Starting with Chrome 47, getUserMedia() requests are only allowed from secure origins: HTTPS or localhost.
+
 ##Live examples
-* ~~http://kievlinza.kiev.ua/servis/fitting/~~ rebuilt with flash, but worse ;)
+* https://hcnotes.in.ua/tryonface/
