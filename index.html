@@ -50,16 +50,7 @@
         <!-- three.js r54 -->
         <script src="js/three.js"></script>
         <!-- clmtrack -->
-        <script src="js/numeric-1.2.6.min.js"></script>
         <script src="js/utils.js"></script>
-        <script src="js/jsfeat-min.js"></script>
-        <script src="js/frontalface.js"></script>
-        <script src="js/left_eye_filter.js"></script>
-        <script src="js/right_eye_filter.js"></script>
-        <script src="js/nose_filter.js"></script>
-        <script src="js/svmfilter_webgl.js"></script>
-        <script src="js/svmfilter_fft.js"></script>
-        <script src="js/model_spca_20_svm.js"></script>
         <script src="js/clmtrackr.js"></script>
         <div id="tryon">
             <video id="camera" loop></video>
@@ -114,44 +105,42 @@
 
                 /* face tracker */
                 this.tracker = new clm.tracker({useWebGL: true});
-                this.tracker.init(pModel);
+                this.tracker.init();
 
                 /**
                  * Start try-on
                  * @returns {undefined}
                  */
                 this.start = function() {
-                    var vid = ref.video;
+                    var video = ref.video;
 
-                    navigator.getUserMedia = navigator.getUserMedia || navigator.webkitGetUserMedia || navigator.mozGetUserMedia || navigator.msGetUserMedia;
-                    window.URL = window.URL || window.webkitURL || window.msURL || window.mozURL;
+                    navigator.getUserMedia = (
+                        navigator.getUserMedia ||
+                        navigator.webkitGetUserMedia ||
+                        navigator.mozGetUserMedia ||
+                        navigator.msGetUserMedia
+                    );
 
-                    // check for camera support
                     if (navigator.getUserMedia) {
-                        // set up stream
-                        var videoSelector = {video: true};
-                        if (window.navigator.appVersion.match(/Chrome\/(.*?) /)) {
-                            var chromeVersion = parseInt(window.navigator.appVersion.match(/Chrome\/(\d+)\./)[1], 10);
-                            if (chromeVersion < 20) {
-                                videoSelector = "video";
+                        navigator.getUserMedia(
+                            {
+                                video: true
+                            },
+                            function (localMediaStream) {
+                                video.src = window.URL.createObjectURL(localMediaStream);
+                                video.play();
+                                ref.changeStatus('STATUS_CAMERA_ERROR');
+                            },
+                            function (err) {
+                                ref.changeStatus('STATUS_CAMERA_ERROR');
                             }
-                        };
-                        navigator.getUserMedia(videoSelector, function (stream) {
-                            if (vid.mozCaptureStream) {
-                                vid.mozSrcObject = stream;
-                            } else {
-                                vid.src = (window.URL && window.URL.createObjectURL(stream)) || stream;
-                            }
-                            vid.play();
-                        }, function () {
-                            ref.changeStatus('STATUS_CAMERA_ERROR');
-                        });
+                        );
                     } else {
                         ref.changeStatus('STATUS_CAMERA_ERROR');
                     }
 
                     //start tracking
-                    ref.tracker.start(vid);
+                    ref.tracker.start(video);
                     //continue in loop
                     ref.loop();
                 };
@@ -339,9 +328,9 @@
 
                 var object = {
                     outside: {
-                        left: 'glasses/left.png',
-                        right: 'glasses/right.png',
-                        front: 'glasses/front.png'
+                        left: './glasses/left.png',
+                        right: './glasses/right.png',
+                        front: './glasses/front.png'
                     }
                 };
 
