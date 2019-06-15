@@ -66,9 +66,10 @@
              * clmtrack https://github.com/auduno/clmtrackr
              *
              * @author Yevhen Matasar <matasar.ei@gmail.com>
-             * @param obj Params
-             * @returns obj Class instance
-             * @version 20150128
+             *
+             * @param {Object} params
+             *
+             * @version 20190615
              */
             var TryOnFace = function (params) {
                 var ref = this;
@@ -127,7 +128,7 @@
                                 video: true
                             },
                             function (localMediaStream) {
-                                video.src = window.URL.createObjectURL(localMediaStream);
+                                video.srcObject = localMediaStream;
                                 video.play();
                                 ref.changeStatus('STATUS_CAMERA_ERROR');
                             },
