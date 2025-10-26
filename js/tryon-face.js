@@ -46,12 +46,12 @@ export class TryOnFace {
         document.getElementById(this.selector).style.width = this.width + "px";
         this.video.setAttribute('width', this.width);
         this.video.setAttribute('height', this.height);
-        this.tracker = new clm.tracker({useWebGL: true});
-        this.tracker.init();
         this.stream = null;
         this.position = { x: 0, y: 0, z: 0 };
         this.rotation = { x: 0, y: 0 };
         this.size = { x: 1, y: 1, z: 1 };
+        this.faceMesh = null;
+        this.camera = null;
         this.init3D();
     }
 
@@ -61,86 +61,110 @@ export class TryOnFace {
     }
 
     start() {
-        const video = this.video;
-        const constraints = {
-            video: {
-                width: { ideal: this.width },
-                height: { ideal: this.height }
-            },
-            audio: false
-        };
-        getCameraStreamProxy(constraints)
-            .then((stream) => {
-                this.stream = stream;
-                attachStreamToVideoProxy(stream, video);
-                video.play();
-                this.changeStatus('STATUS_CAMERA_STARTED');
-                this.tracker.start(video);
-                this.loop();
-            })
-            .catch((err) => {
-                this.changeStatus('STATUS_CAMERA_ERROR');
-                console.error('Camera access error:', err && err.message ? err.message : err);
-            });
+        this.changeStatus('STATUS_SEARCH');
+        this.initFaceMesh();
     }
 
     stop() {
-        try {
-            this.tracker.stop();
-        } catch (e) {}
-        if (this.stream) {
-            stopCameraStreamProxy(this.stream);
-            this.stream = null;
+        if (this.camera) {
+            this.camera.stop();
+            this.camera = null;
         }
         this.changeStatus('STATUS_READY');
     }
 
-    calculateDistanceScale(positions) {
-        const L = CONFIG.LANDMARKS;
-        const faceWidth = Math.abs(positions[L.RIGHT_EAR][0] - positions[L.LEFT_EAR][0]);
-        return CONFIG.DETECTION.REFERENCE_FACE_WIDTH / faceWidth;
+    initFaceMesh() {
+        this.faceMesh = new window.FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+        this.faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        this.faceMesh.onResults(this.onResults.bind(this));
+        this.camera = new window.Camera(this.video, {
+            onFrame: async () => {
+                await this.faceMesh.send({image: this.video});
+            },
+            width: this.width,
+            height: this.height
+        });
+        this.camera.start();
     }
 
-    calculateYawAngle(positions) {
-        const L = CONFIG.LANDMARKS;
+    onResults(results) {
+        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+            this.changeStatus('STATUS_SEARCH');
+            this.size.x = 0;
+            this.size.y = 0;
+            this.render();
+            return;
+        }
+        this.changeStatus('STATUS_FOUND');
+        const landmarks = results.multiFaceLandmarks[0];
+        // Use MediaPipe landmark indices for left/right ear, eyes, nose, etc.
+        // See: https://github.com/tensorflow/tfjs-models/blob/master/face-landmarks-detection/mesh_map.jpg
+        // Example indices:
+        // Left ear: 234, Right ear: 454, Left eye: 33, Right eye: 263, Nose tip: 1, Nose bridge: 168
+        const L = {
+            LEFT_EAR: 234,
+            RIGHT_EAR: 454,
+            LEFT_EYE: 33,
+            RIGHT_EYE: 263,
+            NOSE_TIP: 1,
+            NOSE_BRIDGE: 168
+        };
+        function getXY(idx) {
+            return [landmarks[idx].x * this.width, landmarks[idx].y * this.height];
+        }
+        const positions = {};
+        Object.keys(L).forEach(key => {
+            positions[L[key]] = getXY.call(this, L[key]);
+        });
+        // Calculate parameters using MediaPipe landmarks
+        const faceWidth = Math.abs(positions[L.RIGHT_EAR][0] - positions[L.LEFT_EAR][0]);
+        const distanceScale = CONFIG.DETECTION.REFERENCE_FACE_WIDTH / faceWidth;
         const faceCenterX = (positions[L.LEFT_EAR][0] + positions[L.RIGHT_EAR][0]) / 2;
         const noseX = positions[L.NOSE_TIP][0];
         const horizontalOffset = noseX - faceCenterX;
-        const faceWidth = positions[L.RIGHT_EAR][0] - positions[L.LEFT_EAR][0];
         const normalizedOffset = horizontalOffset / (faceWidth / 2);
         const maxRotationRad = Math.PI / 4;
-        return normalizedOffset * maxRotationRad;
-    }
-
-    calculateRollAngle(positions) {
-        const L = CONFIG.LANDMARKS;
+        const yawAngleRad = normalizedOffset * maxRotationRad;
         const leftEyeX = positions[L.LEFT_EYE][0];
         const leftEyeY = positions[L.LEFT_EYE][1];
         const rightEyeX = positions[L.RIGHT_EYE][0];
         const rightEyeY = positions[L.RIGHT_EYE][1];
         const eyeDeltaX = rightEyeX - leftEyeX;
         const eyeDeltaY = rightEyeY - leftEyeY;
-        return Math.atan2(-eyeDeltaY, eyeDeltaX);
-    }
-
-    calculateGlassesCenter(positions) {
-        const L = CONFIG.LANDMARKS;
+        const rollAngleRad = Math.atan2(-eyeDeltaY, eyeDeltaX);
         const centerX = positions[L.NOSE_TIP][0];
         const weight = CONFIG.GLASSES.BRIDGE_WEIGHT;
         const centerY = positions[L.NOSE_BRIDGE][1] * weight + positions[L.NOSE_TIP][1] * (1 - weight);
-        return { x: centerX, y: centerY };
-    }
-
-    calculateGlassesWidth(positions) {
-        const L = CONFIG.LANDMARKS;
-        const faceWidth = positions[L.RIGHT_EAR][0] - positions[L.LEFT_EAR][0];
+        const center = this.correct(centerX, centerY);
+        const eyeDistance = rightEyeX - leftEyeX;
         const widthByFace = faceWidth * CONFIG.GLASSES.WIDTH_TO_FACE_RATIO;
-        const eyeDistance = positions[L.RIGHT_EYE][0] - positions[L.LEFT_EYE][0];
         const widthByEyes = eyeDistance * CONFIG.GLASSES.WIDTH_TO_EYE_RATIO;
-        if (!isFinite(eyeDistance) || eyeDistance < 8) {
-            return widthByFace;
+        const glassesWidth = (!isFinite(eyeDistance) || eyeDistance < 8)
+            ? widthByFace
+            : widthByEyes * 0.65 + widthByFace * 0.35;
+        let frontWidth = 100, frontHeight = 50;
+        if (this.textures && this.textures['front'] && this.textures['front'].image) {
+            frontWidth = this.textures['front'].image.width;
+            frontHeight = this.textures['front'].image.height;
         }
-        return widthByEyes * 0.65 + widthByFace * 0.35;
+        this.position.x = center.x;
+        this.position.y = center.y;
+        this.rotation.y = yawAngleRad * CONFIG.GLASSES.ROTATION_DAMPENING;
+        this.rotation.z = rollAngleRad * CONFIG.GLASSES.ROTATION_DAMPENING;
+        this.size.x = glassesWidth;
+        this.size.y = (this.size.x / frontWidth) * frontHeight;
+        this.size.z = this.size.x * CONFIG.GLASSES.DEPTH_TO_WIDTH_RATIO;
+        const absYaw = Math.min(Math.abs(yawAngleRad), maxRotationRad) / maxRotationRad;
+        const depthDampen = 1 - (absYaw * 0.6);
+        this.position.z = - (this.size.z / 2) * depthDampen;
+        this.render();
     }
 
     loop() {
