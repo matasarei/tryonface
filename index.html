@@ -17,6 +17,15 @@
             transform: scaleX(-1);
         }
 
+        #debugCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            /* Mirror horizontally for a natural camera preview */
+            transform: scaleX(-1);
+            pointer-events: none;
+        }
+
         #camera {
             /* Mirror horizontally for a natural camera preview */
             transform: scaleX(-1);
@@ -34,6 +43,12 @@
             display: block;
         }
 
+        #debugToggle {
+            margin: 10px auto;
+            width: 120px;
+            display: block;
+        }
+
         #debug {
             width: 640px;
             margin: 0 auto;
@@ -48,14 +63,15 @@
     </style>
 </head>
 <body>
-<!-- MediaPipe Face Mesh and Camera Utils from CDN -->
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 <div id="tryon">
     <video id="camera" loop></video>
     <canvas id="overlay"></canvas>
+    <canvas id="debugCanvas"></canvas>
 </div>
 <button id="start">Start</button>
+<button id="debugToggle">Toggle Debug</button>
 <div id="debug"></div>
 <div id="hint">Turn your face towards the camera and move your head to adjust the glasses position.</div>
 
@@ -64,6 +80,7 @@
 
     const startButton = document.getElementById('start');
     startButton.style.display = 'none';
+    const debugToggleButton = document.getElementById('debugToggle');
     const debugDiv = document.getElementById('debug');
 
     const object = {
@@ -76,6 +93,7 @@
 
     let tryOn = null;
     let debugInterval = null;
+    let debugMode = false;
 
     function safeFixed(val, digits = 1) {
         return (typeof val === 'number' && isFinite(val)) ? val.toFixed(digits) : 'N/A';
@@ -126,6 +144,18 @@
                 tryOn.start();
                 debugInterval = setInterval(updateDebug, 250);
                 startButton.textContent = 'Stop';
+            }
+        });
+
+        debugToggleButton.addEventListener('click', function() {
+            if (!tryOn) return;
+            debugMode = !debugMode;
+            if (debugMode) {
+                tryOn.enableDebug();
+                debugToggleButton.textContent = 'Hide Debug';
+            } else {
+                tryOn.disableDebug();
+                debugToggleButton.textContent = 'Show Debug';
             }
         });
 
