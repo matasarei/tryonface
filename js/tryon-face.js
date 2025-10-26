@@ -46,12 +46,18 @@ export class TryOnFace {
         document.getElementById(this.selector).style.width = this.width + "px";
         this.video.setAttribute('width', this.width);
         this.video.setAttribute('height', this.height);
-        this.tracker = new clm.tracker({useWebGL: true});
-        this.tracker.init();
         this.stream = null;
         this.position = { x: 0, y: 0, z: 0 };
         this.rotation = { x: 0, y: 0 };
         this.size = { x: 1, y: 1, z: 1 };
+        this.faceMesh = null;
+        this.camera = null;
+        this.debugEnabled = params.debug !== undefined ? params.debug : false;
+        this.debugCanvas = document.getElementById('debugCanvas');
+        this.debugCanvas.width = this.width;
+        this.debugCanvas.height = this.height;
+        this.debugCtx = this.debugCanvas.getContext('2d');
+        this.lastLandmarks = null;
         this.init3D();
     }
 
@@ -61,86 +67,118 @@ export class TryOnFace {
     }
 
     start() {
-        const video = this.video;
-        const constraints = {
-            video: {
-                width: { ideal: this.width },
-                height: { ideal: this.height }
-            },
-            audio: false
-        };
-        getCameraStreamProxy(constraints)
-            .then((stream) => {
-                this.stream = stream;
-                attachStreamToVideoProxy(stream, video);
-                video.play();
-                this.changeStatus('STATUS_CAMERA_STARTED');
-                this.tracker.start(video);
-                this.loop();
-            })
-            .catch((err) => {
-                this.changeStatus('STATUS_CAMERA_ERROR');
-                console.error('Camera access error:', err && err.message ? err.message : err);
-            });
+        this.changeStatus('STATUS_SEARCH');
+        this.initFaceMesh();
     }
 
     stop() {
-        try {
-            this.tracker.stop();
-        } catch (e) {}
-        if (this.stream) {
-            stopCameraStreamProxy(this.stream);
-            this.stream = null;
+        if (this.camera) {
+            this.camera.stop();
+            this.camera = null;
         }
         this.changeStatus('STATUS_READY');
     }
 
-    calculateDistanceScale(positions) {
-        const L = CONFIG.LANDMARKS;
-        const faceWidth = Math.abs(positions[L.RIGHT_EAR][0] - positions[L.LEFT_EAR][0]);
-        return CONFIG.DETECTION.REFERENCE_FACE_WIDTH / faceWidth;
+    initFaceMesh() {
+        this.faceMesh = new window.FaceMesh({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+        });
+        this.faceMesh.setOptions({
+            maxNumFaces: 1,
+            refineLandmarks: true,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        this.faceMesh.onResults(this.onResults.bind(this));
+        this.camera = new window.Camera(this.video, {
+            onFrame: async () => {
+                await this.faceMesh.send({image: this.video});
+            },
+            width: this.width,
+            height: this.height
+        });
+        this.camera.start();
     }
 
-    calculateYawAngle(positions) {
-        const L = CONFIG.LANDMARKS;
+    onResults(results) {
+        if (!results.multiFaceLandmarks || results.multiFaceLandmarks.length === 0) {
+            this.changeStatus('STATUS_SEARCH');
+            this.size.x = 0;
+            this.size.y = 0;
+            this.lastLandmarks = null;
+            this.render();
+            if (this.debugEnabled && this.debugCtx) {
+                // Clear debug canvas when no face detected
+                this.debugCtx.clearRect(0, 0, this.width, this.height);
+            }
+            return;
+        }
+        this.changeStatus('STATUS_FOUND');
+        const landmarks = results.multiFaceLandmarks[0];
+        this.lastLandmarks = landmarks;
+
+        // Use MediaPipe landmark indices for left/right ear, eyes, nose, etc.
+        // See: https://github.com/tensorflow/tfjs-models/blob/master/face-landmarks-detection/mesh_map.jpg
+        // Example indices:
+        // Left ear: 234, Right ear: 454, Left eye: 33, Right eye: 263, Nose tip: 1, Nose bridge: 168
+        const L = {
+            LEFT_EAR: 234,
+            RIGHT_EAR: 454,
+            LEFT_EYE: 33,
+            RIGHT_EYE: 263,
+            NOSE_TIP: 1,
+            NOSE_BRIDGE: 168
+        };
+        function getXY(idx) {
+            return [landmarks[idx].x * this.width, landmarks[idx].y * this.height];
+        }
+        const positions = {};
+        Object.keys(L).forEach(key => {
+            positions[L[key]] = getXY.call(this, L[key]);
+        });
+        // Calculate parameters using MediaPipe landmarks
+        const faceWidth = Math.abs(positions[L.RIGHT_EAR][0] - positions[L.LEFT_EAR][0]);
+        const distanceScale = CONFIG.DETECTION.REFERENCE_FACE_WIDTH / faceWidth;
         const faceCenterX = (positions[L.LEFT_EAR][0] + positions[L.RIGHT_EAR][0]) / 2;
         const noseX = positions[L.NOSE_TIP][0];
         const horizontalOffset = noseX - faceCenterX;
-        const faceWidth = positions[L.RIGHT_EAR][0] - positions[L.LEFT_EAR][0];
         const normalizedOffset = horizontalOffset / (faceWidth / 2);
         const maxRotationRad = Math.PI / 4;
-        return normalizedOffset * maxRotationRad;
-    }
-
-    calculateRollAngle(positions) {
-        const L = CONFIG.LANDMARKS;
+        const yawAngleRad = normalizedOffset * maxRotationRad;
         const leftEyeX = positions[L.LEFT_EYE][0];
         const leftEyeY = positions[L.LEFT_EYE][1];
         const rightEyeX = positions[L.RIGHT_EYE][0];
         const rightEyeY = positions[L.RIGHT_EYE][1];
         const eyeDeltaX = rightEyeX - leftEyeX;
         const eyeDeltaY = rightEyeY - leftEyeY;
-        return Math.atan2(-eyeDeltaY, eyeDeltaX);
-    }
-
-    calculateGlassesCenter(positions) {
-        const L = CONFIG.LANDMARKS;
+        const rollAngleRad = Math.atan2(-eyeDeltaY, eyeDeltaX);
         const centerX = positions[L.NOSE_TIP][0];
         const weight = CONFIG.GLASSES.BRIDGE_WEIGHT;
         const centerY = positions[L.NOSE_BRIDGE][1] * weight + positions[L.NOSE_TIP][1] * (1 - weight);
-        return { x: centerX, y: centerY };
-    }
-
-    calculateGlassesWidth(positions) {
-        const L = CONFIG.LANDMARKS;
-        const faceWidth = positions[L.RIGHT_EAR][0] - positions[L.LEFT_EAR][0];
+        const center = this.correct(centerX, centerY);
+        const eyeDistance = rightEyeX - leftEyeX;
         const widthByFace = faceWidth * CONFIG.GLASSES.WIDTH_TO_FACE_RATIO;
-        const eyeDistance = positions[L.RIGHT_EYE][0] - positions[L.LEFT_EYE][0];
         const widthByEyes = eyeDistance * CONFIG.GLASSES.WIDTH_TO_EYE_RATIO;
-        if (!isFinite(eyeDistance) || eyeDistance < 8) {
-            return widthByFace;
+        const glassesWidth = (!isFinite(eyeDistance) || eyeDistance < 8)
+            ? widthByFace
+            : widthByEyes * 0.65 + widthByFace * 0.35;
+        let frontWidth = 100, frontHeight = 50;
+        if (this.textures && this.textures['front'] && this.textures['front'].image) {
+            frontWidth = this.textures['front'].image.width;
+            frontHeight = this.textures['front'].image.height;
         }
-        return widthByEyes * 0.65 + widthByFace * 0.35;
+        this.position.x = center.x;
+        this.position.y = center.y;
+        this.rotation.y = yawAngleRad * CONFIG.GLASSES.ROTATION_DAMPENING;
+        this.rotation.z = rollAngleRad * CONFIG.GLASSES.ROTATION_DAMPENING;
+        this.size.x = glassesWidth;
+        this.size.y = (this.size.x / frontWidth) * frontHeight;
+        this.size.z = this.size.x * CONFIG.GLASSES.DEPTH_TO_WIDTH_RATIO;
+        const absYaw = Math.min(Math.abs(yawAngleRad), maxRotationRad) / maxRotationRad;
+        const depthDampen = 1 - (absYaw * 0.6);
+        this.position.z = - (this.size.z) * depthDampen;
+        this.render();
+        this.drawDebugLandmarks();
     }
 
     loop() {
@@ -276,6 +314,7 @@ export class TryOnFace {
         this.textures = await this.loadTextures(textureLoader, renderer, sources);
         const materials = this.createMaterials(this.textures);
         const { scene, camera, cube } = this.createScene(renderer, materials);
+        this.renderer = renderer;
         this.render = () => {
             cube.position.x = this.position.x;
             cube.position.y = this.position.y;
@@ -299,5 +338,147 @@ export class TryOnFace {
             rotation: { ...this.rotation },
             size: { ...this.size }
         };
+    }
+
+    enableDebug() {
+        this.debugEnabled = true;
+    }
+
+    disableDebug() {
+        this.debugEnabled = false;
+        if (this.debugCtx) {
+            this.debugCtx.clearRect(0, 0, this.width, this.height);
+        }
+    }
+
+    drawDebugLandmarks() {
+        if (!this.debugEnabled || !this.lastLandmarks || !this.debugCtx) {
+            return;
+        }
+
+        const ctx = this.debugCtx;
+        const landmarks = this.lastLandmarks;
+
+        // Clear previous debug drawings
+        ctx.clearRect(0, 0, this.width, this.height);
+
+        // Key landmark indices for MediaPipe Face Mesh
+        const keyPoints = {
+            LEFT_EAR: 234,
+            RIGHT_EAR: 454,
+            LEFT_EYE: 33,
+            RIGHT_EYE: 263,
+            NOSE_TIP: 1,
+            NOSE_BRIDGE: 168,
+            LEFT_EYE_OUTER: 133,
+            RIGHT_EYE_OUTER: 362,
+            LEFT_EYE_INNER: 33,
+            RIGHT_EYE_INNER: 263,
+            CHIN: 152,
+            FOREHEAD: 10,
+            LEFT_CHEEK: 234,
+            RIGHT_CHEEK: 454
+        };
+
+        // Draw all landmarks as small dots (optional, can be overwhelming)
+        ctx.fillStyle = 'rgba(0, 255, 0, 0.3)';
+        landmarks.forEach((landmark, idx) => {
+            const x = landmark.x * this.width;
+            const y = landmark.y * this.height;
+            ctx.beginPath();
+            ctx.arc(x, y, 1, 0, 2 * Math.PI);
+            ctx.fill();
+        });
+
+        // Draw key landmarks with labels
+        Object.entries(keyPoints).forEach(([label, idx]) => {
+            const landmark = landmarks[idx];
+            if (!landmark) return;
+
+            const x = landmark.x * this.width;
+            const y = landmark.y * this.height;
+
+            // Draw a larger circle for key points
+            ctx.fillStyle = 'rgba(255, 0, 0, 0.8)';
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // Draw label
+            ctx.fillStyle = 'rgba(255, 255, 0, 0.9)';
+            ctx.font = '10px monospace';
+            ctx.fillText(label, x + 6, y + 4);
+        });
+
+        // Draw face bounding box
+        const leftEar = landmarks[keyPoints.LEFT_EAR];
+        const rightEar = landmarks[keyPoints.RIGHT_EAR];
+        const forehead = landmarks[keyPoints.FOREHEAD];
+        const chin = landmarks[keyPoints.CHIN];
+
+        if (leftEar && rightEar && forehead && chin) {
+            const left = leftEar.x * this.width;
+            const right = rightEar.x * this.width;
+            const top = forehead.y * this.height;
+            const bottom = chin.y * this.height;
+
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(left, top, right - left, bottom - top);
+
+            // Draw face width line
+            const earY = (leftEar.y + rightEar.y) / 2 * this.height;
+            ctx.strokeStyle = 'rgba(255, 0, 255, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(left, earY);
+            ctx.lineTo(right, earY);
+            ctx.stroke();
+
+            // Draw face width measurement
+            const faceWidth = Math.abs(right - left);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.font = '12px monospace';
+            ctx.fillText(`Face Width: ${faceWidth.toFixed(1)}px`, left, earY - 10);
+        }
+
+        // Draw eye line
+        const leftEye = landmarks[keyPoints.LEFT_EYE];
+        const rightEye = landmarks[keyPoints.RIGHT_EYE];
+        if (leftEye && rightEye) {
+            const lx = leftEye.x * this.width;
+            const ly = leftEye.y * this.height;
+            const rx = rightEye.x * this.width;
+            const ry = rightEye.y * this.height;
+
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(lx, ly);
+            ctx.lineTo(rx, ry);
+            ctx.stroke();
+
+            const eyeDistance = Math.sqrt((rx - lx) ** 2 + (ry - ly) ** 2);
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+            ctx.font = '12px monospace';
+            ctx.fillText(`Eye Distance: ${eyeDistance.toFixed(1)}px`, (lx + rx) / 2, (ly + ry) / 2 - 10);
+        }
+
+        // Draw nose bridge to tip line
+        const noseBridge = landmarks[keyPoints.NOSE_BRIDGE];
+        const noseTip = landmarks[keyPoints.NOSE_TIP];
+        if (noseBridge && noseTip) {
+            const bx = noseBridge.x * this.width;
+            const by = noseBridge.y * this.height;
+            const tx = noseTip.x * this.width;
+            const ty = noseTip.y * this.height;
+
+            ctx.strokeStyle = 'rgba(255, 128, 0, 0.8)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(bx, by);
+            ctx.lineTo(tx, ty);
+            ctx.stroke();
+        }
     }
 }
